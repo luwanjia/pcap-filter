@@ -22,7 +22,7 @@ type SessionKey struct {
 	SPort uint   // 源端口
 	DIP   string // 目的IP
 	DPort uint   // 目的端口
-	Proto string // 传输层协议（tcp/udp/icmp）
+	Proto string // 传输层协议 (tcp/udp/icmp)
 }
 
 // 会话信息结构体
@@ -38,7 +38,7 @@ type Session struct {
 // 全局变量
 var (
 	input         string // 输入pcap文件路径
-	proto         string // 传输层协议过滤（tcp/udp/icmp）
+	proto         string // 传输层协议过滤 (tcp/udp/icmp)
 	app           string // 应用层协议过滤
 	sip           string // 源IP过滤
 	sport         uint   // 源端口过滤
@@ -49,23 +49,24 @@ var (
 	customFeature string // 自定义协议特征
 	ignoreCase    bool   // 特征匹配忽略大小写
 
-	sessions = make(map[SessionKey]*Session) // 会话存储映射
-	// HTTP正则匹配规则（通用标准特征）
-	httpRegex = regexp.MustCompile(`(?i)^\s*(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s+|^\s*HTTP/\d\.\d\s+`)
+	sessions       = make(map[SessionKey]*Session) // 会话存储映射
+	originalLinkType layers.LinkType               // 原始PCAP文件的链路类型（关键修复）
+	httpRegex      = regexp.MustCompile(`(?i)^\s*(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s+|^\s*HTTP/\d\.\d\s+`)
 )
 
 func main() {
 	parseFlags()
 
 	if err := validateParams(); err != nil {
-		fmt.Printf("参数错误：%v\n", err)
+		fmt.Printf("参数错误: %v\n", err)
 		printUsage()
 		os.Exit(1)
 	}
 
-	fmt.Printf("正在解析pcap文件：%s\n", input)
+	// 解析PCAP时获取原始链路类型
+	fmt.Printf("正在解析pcap文件: %s\n", input)
 	if err := processPcap(); err != nil {
-		fmt.Printf("解析失败：%v\n", err)
+		fmt.Printf("解析失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -73,7 +74,7 @@ func main() {
 
 	fmt.Printf("解析完成，共找到 %d 个符合条件的会话\n", len(sessions))
 	if err := outputResults(); err != nil {
-		fmt.Printf("输出失败：%v\n", err)
+		fmt.Printf("输出失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -86,17 +87,17 @@ func parseFlags() {
 	fmt.Println("====================")
 
 	flagSet := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	flagSet.StringVar(&input, "input", "", "输入pcap文件路径（必填）")
-	flagSet.StringVar(&proto, "proto", "", "传输层协议过滤（可选：tcp/udp/icmp）")
-	flagSet.StringVar(&app, "app", "", "应用层协议过滤（可选：http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload）")
-	flagSet.StringVar(&sip, "sip", "", "源IP过滤（可选，支持IPv4/IPv6）")
-	flagSet.UintVar(&sport, "sport", 0, "源端口过滤（可选，范围：1-65535）")
-	flagSet.StringVar(&dip, "dip", "", "目的IP过滤（可选，支持IPv4/IPv6）")
-	flagSet.UintVar(&dport, "dport", 0, "目的端口过滤（可选，范围：1-65535）")
-	flagSet.StringVar(&regexStr, "regex", "", "正则过滤表达式（可选，匹配应用层数据）")
-	flagSet.StringVar(&outputDir, "output", "", "输出目录路径（可选，不指定则仅打印结果）")
-	flagSet.StringVar(&customFeature, "custom-feature", "", "自定义协议特征（可选，匹配应用层数据）")
-	flagSet.BoolVar(&ignoreCase, "ignore-case", true, "特征匹配忽略大小写（可选，默认：true）")
+	flagSet.StringVar(&input, "input", "", "输入pcap文件路径 (必填)")
+	flagSet.StringVar(&proto, "proto", "", "传输层协议过滤 (可选: tcp/udp/icmp)")
+	flagSet.StringVar(&app, "app", "", "应用层协议过滤 (可选: http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload)")
+	flagSet.StringVar(&sip, "sip", "", "源IP过滤 (可选，支持IPv4/IPv6)")
+	flagSet.UintVar(&sport, "sport", 0, "源端口过滤 (可选，范围: 1-65535)")
+	flagSet.StringVar(&dip, "dip", "", "目的IP过滤 (可选，支持IPv4/IPv6)")
+	flagSet.UintVar(&dport, "dport", 0, "目的端口过滤 (可选，范围: 1-65535)")
+	flagSet.StringVar(&regexStr, "regex", "", "正则过滤表达式 (可选，匹配应用层数据)")
+	flagSet.StringVar(&outputDir, "output", "", "输出目录路径 (可选，不指定则仅打印结果)")
+	flagSet.StringVar(&customFeature, "custom-feature", "", "自定义协议特征 (可选，匹配应用层数据)")
+	flagSet.BoolVar(&ignoreCase, "ignore-case", true, "特征匹配忽略大小写 (可选，默认: true)")
 
 	flagSet.Usage = printUsage
 	if len(os.Args) == 1 {
@@ -105,7 +106,7 @@ func parseFlags() {
 	}
 
 	if err := flagSet.Parse(os.Args[1:]); err != nil {
-		fmt.Printf("参数解析错误：%v\n", err)
+		fmt.Printf("参数解析错误: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -117,7 +118,7 @@ func validateParams() error {
 		return errors.New("必须通过 -input 参数指定pcap文件路径")
 	}
 	if _, err := os.Stat(input); os.IsNotExist(err) {
-		return fmt.Errorf("输入文件不存在：%s", input)
+		return fmt.Errorf("输入文件不存在: %s", input)
 	}
 
 	// 传输层协议校验
@@ -132,7 +133,7 @@ func validateParams() error {
 		"tcp-text": true, "tcp-binary": true, "tcp-no-payload": true, "": true,
 	}
 	if !supportedApps[strings.ToLower(app)] {
-		return errors.New("app参数支持：http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload")
+		return errors.New("app参数支持: http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload")
 	}
 
 	// 端口范围校验
@@ -145,16 +146,16 @@ func validateParams() error {
 
 	// IP格式校验
 	if sip != "" && net.ParseIP(sip) == nil {
-		return fmt.Errorf("非法源IP地址：%s", sip)
+		return fmt.Errorf("非法源IP地址: %s", sip)
 	}
 	if dip != "" && net.ParseIP(dip) == nil {
-		return fmt.Errorf("非法目的IP地址：%s", dip)
+		return fmt.Errorf("非法目的IP地址: %s", dip)
 	}
 
 	// 正则表达式校验
 	if regexStr != "" {
 		if _, err := regexp.Compile(regexStr); err != nil {
-			return fmt.Errorf("非法正则表达式：%s（错误：%v）", regexStr, err)
+			return fmt.Errorf("非法正则表达式: %s (错误: %v)", regexStr, err)
 		}
 	}
 
@@ -162,7 +163,7 @@ func validateParams() error {
 	if outputDir != "" {
 		if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 			if err := os.MkdirAll(outputDir, 0755); err != nil {
-				return fmt.Errorf("创建输出目录失败：%v", err)
+				return fmt.Errorf("创建输出目录失败: %v", err)
 			}
 		}
 	}
@@ -174,9 +175,12 @@ func validateParams() error {
 func processPcap() error {
 	handle, err := pcap.OpenOffline(input)
 	if err != nil {
-		return fmt.Errorf("打开pcap文件失败：%v", err)
+		return fmt.Errorf("打开pcap文件失败: %v", err)
 	}
 	defer handle.Close()
+
+	// 记录原始PCAP文件的链路类型
+	originalLinkType = handle.LinkType()
 
 	// 初始化解码器
 	decoder := gopacket.NewDecodingLayerParser(
@@ -191,7 +195,7 @@ func processPcap() error {
 	)
 	decodedLayers := make([]gopacket.LayerType, 0, 10)
 
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	packetSource := gopacket.NewPacketSource(handle, originalLinkType) // 使用原始链路类型解码
 	for packet := range packetSource.Packets() {
 		_ = decoder.DecodeLayers(packet.Data(), &decodedLayers)
 
@@ -222,7 +226,7 @@ func processPcap() error {
 			pktDIP = ip6.DstIP.String()
 		}
 
-		// 提取核心信息
+		// 保留完整packet（含Metadata时间戳）
 		pktSPort := uint(tcp.SrcPort)
 		pktDPort := uint(tcp.DstPort)
 		payload := tcp.Payload
@@ -233,7 +237,7 @@ func processPcap() error {
 			continue
 		}
 
-		// 添加到会话
+		// 保存完整packet
 		addToSession(pktSIP, pktDIP, pktSPort, pktDPort, transProto, payload, len(payload) > 0, packet)
 	}
 
@@ -260,7 +264,7 @@ func applyBasicFilters(pktSIP, pktDIP string, pktSPort, pktDPort uint, transProt
 	return true
 }
 
-// 添加会话
+// 添加会话：保存完整packet
 func addToSession(pktSIP, pktDIP string, pktSPort, pktDPort uint, transProto string, payload []byte, hasValidPayload bool, packet gopacket.Packet) {
 	key := SessionKey{
 		SIP:   pktSIP,
@@ -286,6 +290,7 @@ func addToSession(pktSIP, pktDIP string, pktSPort, pktDPort uint, transProto str
 		session.TCPFlowCache = append(session.TCPFlowCache, payload...)
 		session.hasValidPayload = true
 	}
+	// 保存完整packet，确保Metadata（时间戳、长度）不丢失
 	session.Packets = append(session.Packets, packet)
 }
 
@@ -409,10 +414,10 @@ func sanitizeFilename(name string) string {
 	return reg.ReplaceAllString(name, "_")
 }
 
-// 结果输出
+// 结果输出：使用原始链路类型，严格校验数据包
 func outputResults() error {
 	if outputDir == "" {
-		fmt.Println("\n会话详情：")
+		fmt.Println("\n会话详情: ")
 		fmt.Println("--------------------------------------------------------------------------------------------------")
 		fmt.Printf("%-5s %-7s %-20s %-20s %s\n", "传输层", "应用层协议", "源地址:端口", "目的地址:端口", "正则命中")
 		fmt.Println("--------------------------------------------------------------------------------------------------")
@@ -434,8 +439,15 @@ func outputResults() error {
 		return nil
 	}
 
-	// 保存会话到pcap文件
+	// 保存会话到pcap文件：使用原始链路类型
 	for _, session := range sessions {
+		// 过滤无数据包的异常会话
+		if len(session.Packets) == 0 {
+			fmt.Printf("跳过空会话: %s:%d -> %s:%d\n", session.Key.SIP, session.Key.SPort, session.Key.DIP, session.Key.DPort)
+			continue
+		}
+
+		// 生成合法文件名
 		filename := fmt.Sprintf("%s_%d_%s_%d_%s",
 			session.Key.SIP,
 			session.Key.SPort,
@@ -449,31 +461,44 @@ func outputResults() error {
 		filename += ".pcap"
 		filePath := filepath.Join(outputDir, filename)
 
+		// 创建文件
 		file, err := os.Create(filePath)
 		if err != nil {
-			return fmt.Errorf("创建文件失败：%s（错误：%v）", filePath, err)
+			return fmt.Errorf("创建文件失败: %s (错误: %v)", filePath, err)
 		}
 		defer file.Close()
 
-		linkType := session.Packets[0].LinkLayer().LayerType()
+		// 关键修复3：使用原始链路类型写入文件头（而非会话数据包的链路类型）
 		writer := pcapgo.NewWriter(file)
-		if err := writer.WriteFileHeader(65536, layers.LinkType(linkType)); err != nil {
-			return fmt.Errorf("写入文件头失败：%s（错误：%v）", filePath, err)
+		snapLen := uint32(65536) // 标准快照长度，覆盖绝大多数场景
+		if err := writer.WriteFileHeader(snapLen, originalLinkType); err != nil {
+			return fmt.Errorf("写入文件头失败: %s (错误: %v)", filePath, err)
 		}
 
+		// 写入数据包：严格校验字段
 		for _, pkt := range session.Packets {
-			captureInfo := gopacket.CaptureInfo{
-				Timestamp:      pkt.Metadata().Timestamp,
-				CaptureLength:  len(pkt.Data()),
-				Length:         len(pkt.Data()),
-				InterfaceIndex: 0,
+			// 过滤空数据数据包
+			pktData := pkt.Data()
+			if len(pktData) == 0 {
+				continue
 			}
-			if err := writer.WritePacket(captureInfo, pkt.Data()); err != nil {
-				return fmt.Errorf("写入数据包失败：%s（错误：%v）", filePath, err)
+
+			// 从原始packet的Metadata获取完整字段（避免手动构造错误）
+			meta := pkt.Metadata()
+			captureInfo := gopacket.CaptureInfo{
+				Timestamp:      meta.Timestamp,       // 原始时间戳（精确到纳秒）
+				CaptureLength:  len(pktData),         // 捕获长度（实际写入长度）
+				Length:         len(pktData),         // 原始长度（离线文件与捕获长度一致）
+				InterfaceIndex: meta.InterfaceIndex, // 原始接口索引（不影响解析，保留完整性）
+			}
+
+			// 写入数据包：校验写入结果
+			if err := writer.WritePacket(captureInfo, pktData); err != nil {
+				return fmt.Errorf("写入数据包失败: %s (包时间: %v, 错误: %v)", filePath, meta.Timestamp, err)
 			}
 		}
 
-		fmt.Printf("已保存会话文件：%s\n", filePath)
+		fmt.Printf("已保存会话文件: %s (%d pkts)\n", filePath, len(session.Packets))
 	}
 
 	return nil
@@ -482,33 +507,33 @@ func outputResults() error {
 // 打印使用说明
 func printUsage() {
 	fmt.Println(`
-使用语法：
+使用语法: 
   pcap-filter [参数]
 
-参数说明：
-  -input          string   输入pcap文件路径（必填）
-  -proto          string   传输层协议过滤（可选：tcp/udp/icmp）
-  -app            string   应用层协议过滤（可选：http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload）
-  -sip            string   源IP过滤（可选，支持IPv4/IPv6）
-  -sport          uint     源端口过滤（可选，范围：1-65535）
-  -dip            string   目的IP过滤（可选，支持IPv4/IPv6）
-  -dport          uint     目的端口过滤（可选，范围：1-65535）
-  -regex          string   正则过滤表达式（可选，匹配应用层数据）
-  -output         string   输出目录路径（可选，不指定则仅打印结果）
-  -custom-feature string  自定义协议特征（可选，匹配应用层数据）
-  -ignore-case    bool     特征匹配忽略大小写（可选，默认：true）
+参数说明: 
+  -input          string   输入pcap文件路径 (必填)
+  -proto          string   传输层协议过滤 (可选: tcp/udp/icmp)
+  -app            string   应用层协议过滤 (可选: http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload)
+  -sip            string   源IP过滤 (可选，支持IPv4/IPv6)
+  -sport          uint     源端口过滤 (可选，范围: 1-65535)
+  -dip            string   目的IP过滤 (可选，支持IPv4/IPv6)
+  -dport          uint     目的端口过滤 (可选，范围: 1-65535)
+  -regex          string   正则过滤表达式 (可选，匹配应用层数据)
+  -output         string   输出目录路径 (可选，不指定则仅打印结果)
+  -custom-feature string   自定义协议特征 (可选，匹配应用层数据)
+  -ignore-case    bool     特征匹配忽略大小写 (可选，默认: true)
 
-使用样例：
-  1. 分析pcap文件并打印所有会话：
+使用样例: 
+  1. 分析pcap文件并打印所有会话: 
      pcap-filter -input traffic.pcap
 
-  2. 过滤HTTP协议会话并保存到指定目录：
+  2. 过滤HTTP协议会话并保存到指定目录: 
      pcap-filter -input traffic.pcap -app http -output ./http_sessions
 
-  3. 过滤源IP为192.168.1.100、目的端口为80的TCP会话：
+  3. 过滤源IP为192.168.1.100、目的端口为80的TCP会话: 
      pcap-filter -input traffic.pcap -proto tcp -sip 192.168.1.100 -dport 80
 
-  4. 用正则匹配含特定参数的HTTP会话：
+  4. 用正则匹配含特定参数的HTTP会话: 
      pcap-filter -input traffic.pcap -app http -regex "REQ_ID=.{16}" -output ./target_sessions
 `)
 }

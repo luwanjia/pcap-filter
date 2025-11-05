@@ -33,7 +33,7 @@ pcap-filter(PCAP会话信息过滤工具)
   -dport          uint     目的端口过滤（可选，范围：1-65535）
   -regex          string   正则过滤表达式（可选，匹配应用层数据）
   -output         string   输出目录路径（可选，不指定则仅打印结果）
-  -custom-feature string  自定义协议特征（可选，匹配应用层数据）
+  -custom-feature string   自定义协议特征（可选，匹配应用层数据）
   -ignore-case    bool     特征匹配忽略大小写（可选，默认：true）
 
 使用样例：
