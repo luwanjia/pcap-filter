@@ -9,9 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-)
 
-import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -47,6 +45,7 @@ var (
 	dip           string // 目的IP过滤
 	dport         uint   // 目的端口过滤
 	regexStr      string // 正则过滤表达式
+	regexInvert   bool   // 正则取反开关
 	outputDir     string // 输出目录路径
 	customFeature string // 自定义协议特征
 	ignoreCase    bool   // 特征匹配忽略大小写
@@ -65,68 +64,66 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 解析PCAP文件
 	fmt.Printf("正在解析pcap文件: %s\n", input)
 	if err := processPcap(); err != nil {
 		fmt.Printf("解析失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 应用层协议识别
+	// 应用层协议识别 + 初步协议过滤
 	identifyAppProtocols()
 
-	// -------------------------- 新增：统计与过滤逻辑 --------------------------
-	// 1. 统计解析完成后的总会话数（过滤前）
-	totalSessionsCount := len(sessions)
-
-	// 2. 过滤无命中会话：
-	//    - 过滤"tcp-no-payload"会话
-	//    - 若指定正则, 过滤正则未命中（RegexMatch为空）的会话
+	// -------------------------- 核心统计与过滤 --------------------------
+	originalTotal := len(sessions) // 1. 原始解析会话总数（基础过滤后）
 	filteredSessions := make(map[SessionKey]*Session)
-	protoCountMap := make(map[string]int) // 按应用层协议统计保留会话数
+	protoCount := make(map[string]int) // 按应用层协议分布
 
 	for key, session := range sessions {
-		keepFlag := true
+		// 过滤逻辑：根据 regexInvert 动态判断是否保留
+		hit := true
 
-		// 过滤条件1：排除无负载会话
-		if session.AppProto == "tcp-no-payload" {
-			keepFlag = false
+		if regexStr != "" {
+			if regexInvert {
+				// 取反模式：正则命中 → 不保留（保留未命中的）
+				if session.RegexMatch != "" {
+					hit = false
+				}
+			} else {
+				// 正向模式（默认）：正则未命中 → 不保留（保留命中的）
+				if session.RegexMatch == "" {
+					hit = false
+				}
+			}
 		}
 
-		// 过滤条件2：若指定正则, 排除正则未命中的会话
-		if regexStr != "" && session.RegexMatch == "" {
-			keepFlag = false
-		}
-
-		// 保留符合条件的会话, 并统计协议分布
-		if keepFlag {
+		// 命中则保留并统计
+		if hit {
 			filteredSessions[key] = session
-			protoCountMap[session.AppProto]++
+			protoCount[session.AppProto]++
 		}
 	}
 
-	// 更新会话为过滤后的结果
+	// 更新为过滤后结果
 	sessions = filteredSessions
-	filteredSessionsCount := len(sessions)
+	filteredTotal := len(sessions) // 2. 过滤后保留会话数
 	// ------------------------------------------------------------------------
 
-	fmt.Printf("解析完成, 共找到 %d 个符合条件的会话, 过滤后保留 %d 个\n", totalSessionsCount, filteredSessionsCount)
+	fmt.Printf("解析完成，原始解析会话总数: %d, 过滤后保留会话数: %d\n", originalTotal, filteredTotal)
 
-	// 输出结果（仅保留的会话）
 	if err := outputResults(); err != nil {
 		fmt.Printf("输出失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	// -------------------------- 新增：打印统计信息 --------------------------
-	fmt.Println("\n=================== 会话统计信息 ===================")
-	fmt.Printf("1. 原始解析会话总数：%d\n", totalSessionsCount)
-	fmt.Printf("2. 过滤后保留会话数：%d\n", filteredSessionsCount)
-	fmt.Println("3. 保留会话按应用层协议分布：")
-	for protoName, count := range protoCountMap {
-		fmt.Printf("   - %-12s：%d 个\n", protoName, count)
+	// -------------------------- 简化统计信息 --------------------------
+	fmt.Println("\n=================== 会话统计 ===================")
+	fmt.Printf("1. 原始解析会话总数：%d\n", originalTotal)
+	fmt.Printf("2. 过滤后保留会话数：%d\n", filteredTotal)
+	fmt.Println("3. 保留会话协议分布：")
+	for p, c := range protoCount {
+		fmt.Printf("   - %-12s：%d 个\n", p, c)
 	}
-	fmt.Println("===================================================")
+	fmt.Println("===============================================")
 	// ------------------------------------------------------------------------
 
 	fmt.Println("操作完成！")
@@ -141,14 +138,15 @@ func parseFlags() {
 	flagSet.StringVar(&input, "input", "", "输入pcap文件路径 (必填)")
 	flagSet.StringVar(&proto, "proto", "", "传输层协议过滤 (可选: tcp/udp/icmp)")
 	flagSet.StringVar(&app, "app", "", "应用层协议过滤 (可选: http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload)")
-	flagSet.StringVar(&sip, "sip", "", "源IP过滤 (可选, 支持IPv4/IPv6)")
-	flagSet.UintVar(&sport, "sport", 0, "源端口过滤 (可选, 范围: 1-65535)")
-	flagSet.StringVar(&dip, "dip", "", "目的IP过滤 (可选, 支持IPv4/IPv6)")
-	flagSet.UintVar(&dport, "dport", 0, "目的端口过滤 (可选, 范围: 1-65535)")
-	flagSet.StringVar(&regexStr, "regex", "", "正则过滤表达式 (可选, 匹配应用层数据)")
-	flagSet.StringVar(&outputDir, "output", "", "输出目录路径 (可选, 不指定则仅打印结果)")
-	flagSet.StringVar(&customFeature, "custom-feature", "", "自定义协议特征 (可选, 匹配应用层数据)")
-	flagSet.BoolVar(&ignoreCase, "ignore-case", true, "特征匹配忽略大小写 (可选, 默认: true)")
+	flagSet.StringVar(&sip, "sip", "", "源IP过滤 (可选，支持IPv4/IPv6)")
+	flagSet.UintVar(&sport, "sport", 0, "源端口过滤 (可选，范围: 1-65535)")
+	flagSet.StringVar(&dip, "dip", "", "目的IP过滤 (可选，支持IPv4/IPv6)")
+	flagSet.UintVar(&dport, "dport", 0, "目的端口过滤 (可选，范围: 1-65535)")
+	flagSet.StringVar(&regexStr, "regex", "", "正则过滤表达式 (可选，匹配应用层数据)")
+	flagSet.BoolVar(&regexInvert, "regex-invert", false, "正则取反匹配 (可选，默认: false，true=保留未命中正则的会话)")
+	flagSet.StringVar(&outputDir, "output", "", "输出目录路径 (可选，不指定则仅打印结果)")
+	flagSet.StringVar(&customFeature, "custom-feature", "", "自定义协议特征 (可选，匹配应用层数据)")
+	flagSet.BoolVar(&ignoreCase, "ignore-case", true, "特征匹配忽略大小写 (可选，默认: true)")
 
 	flagSet.Usage = printUsage
 	if len(os.Args) == 1 {
@@ -330,93 +328,75 @@ func addToSession(pktSIP, pktDIP string, pktSPort, pktDPort uint, transProto str
 	session.Packets = append(session.Packets, packet)
 }
 
-// 应用层协议识别
+// 应用层协议识别 + 协议过滤
 func identifyAppProtocols() {
+	validSessions := make(map[SessionKey]*Session)
+
 	for _, session := range sessions {
+		// 协议识别
 		if !session.hasValidPayload || len(session.TCPFlowCache) == 0 {
 			session.AppProto = "tcp-no-payload"
-			continue
-		}
-
-		fullPayload := session.TCPFlowCache
-		payloadStr := string(fullPayload)
-
-		// 识别HTTP
-		if httpRegex.MatchString(payloadStr) {
-			session.AppProto = "http"
-			if regexStr != "" {
-				match := regexp.MustCompile(regexStr).Find(fullPayload)
-				if match == nil {
-					session.RegexMatch = ""
-				} else {
-					session.RegexMatch = sanitizeFilename(string(match[:min(len(match), 32)]))
-				}
-			}
-			continue
-		}
-
-		// 识别其他协议
-		otherProtos := map[string][]string{
-			"https": {"\x16\x03\x01", "\x16\x03\x02", "\x16\x03\x03", "\x16\x03\x04"},
-			"ssh":   {"SSH-"},
-			"mysql": {"\x0aMySQL", "\x0amariadb"},
-			"redis": {"+OK", "-ERR", ":1", "$0", "*0"},
-		}
-		identified := false
-		for protoName, features := range otherProtos {
-			for _, feat := range features {
-				if ignoreCase {
-					if strings.Contains(strings.ToLower(payloadStr), strings.ToLower(feat)) {
-						session.AppProto = protoName
-						identified = true
-						break
-					}
-				} else {
-					if strings.Contains(payloadStr, feat) {
-						session.AppProto = protoName
-						identified = true
-						break
-					}
-				}
-			}
-			if identified {
-				break
-			}
-		}
-		if identified {
-			if regexStr != "" {
-				match := regexp.MustCompile(regexStr).Find(fullPayload)
-				if match == nil {
-					session.RegexMatch = ""
-				} else {
-					session.RegexMatch = sanitizeFilename(string(match[:min(len(match), 32)]))
-				}
-			}
-			continue
-		}
-
-		// 分类文本/二进制
-		if isTextPayload(fullPayload) {
-			session.AppProto = "tcp-text"
 		} else {
-			session.AppProto = "tcp-binary"
-		}
+			fullPayload := session.TCPFlowCache
+			payloadStr := string(fullPayload)
 
-		// 正则过滤
-		if regexStr != "" {
-			match := regexp.MustCompile(regexStr).Find(fullPayload)
-			if match == nil {
-				session.RegexMatch = ""
+			if httpRegex.MatchString(payloadStr) {
+				session.AppProto = "http"
 			} else {
-				session.RegexMatch = sanitizeFilename(string(match[:min(len(match), 32)]))
+				otherProtos := map[string][]string{
+					"https": {"\x16\x03\x01", "\x16\x03\x02", "\x16\x03\x03", "\x16\x03\x04"},
+					"ssh":   {"SSH-"},
+					"mysql": {"\x0aMySQL", "\x0amariadb"},
+					"redis": {"+OK", "-ERR", ":1", "$0", "*0"},
+				}
+				identified := false
+				for protoName, features := range otherProtos {
+					for _, feat := range features {
+						if ignoreCase {
+							if strings.Contains(strings.ToLower(payloadStr), strings.ToLower(feat)) {
+								session.AppProto = protoName
+								identified = true
+								break
+							}
+						} else {
+							if strings.Contains(payloadStr, feat) {
+								session.AppProto = protoName
+								identified = true
+								break
+							}
+						}
+					}
+					if identified {
+						break
+					}
+				}
+				if !identified {
+					if isTextPayload(fullPayload) {
+						session.AppProto = "tcp-text"
+					} else {
+						session.AppProto = "tcp-binary"
+					}
+				}
+			}
+
+			// 正则匹配
+			if regexStr != "" {
+				match := regexp.MustCompile(regexStr).Find(session.TCPFlowCache)
+				if match != nil {
+					session.RegexMatch = sanitizeFilename(string(match[:min(len(match), 32)]))
+				} else {
+					session.RegexMatch = ""
+				}
 			}
 		}
 
-		// 应用层协议过滤
-		if app != "" && !strings.EqualFold(session.AppProto, app) {
-			delete(sessions, session.Key)
+		// 协议过滤（指定-app则保留匹配项）
+		if app == "" || strings.EqualFold(session.AppProto, app) {
+			validSessions[session.Key] = session
 		}
 	}
+
+	sessions = validSessions
 }
 
 // 文本负载判断
@@ -445,7 +425,7 @@ func sanitizeFilename(name string) string {
 	return reg.ReplaceAllString(name, "_")
 }
 
-// 结果输出（仅输出保留的会话）
+// 结果输出
 func outputResults() error {
 	if len(sessions) == 0 {
 		fmt.Println("\n无符合条件的会话可输出")
@@ -475,7 +455,6 @@ func outputResults() error {
 		return nil
 	}
 
-	// 仅输出保留的会话到文件
 	for _, session := range sessions {
 		filename := fmt.Sprintf("%s_%d_%s_%d_%s",
 			session.Key.SIP,
@@ -517,7 +496,7 @@ func outputResults() error {
 			}
 
 			if err := writer.WritePacket(captureInfo, pktData); err != nil {
-				return fmt.Errorf("写入数据包失败: %s (包时间: %v, 错误: %v)", filePath, meta.Timestamp, err)
+				return fmt.Errorf("写入数据包失败: %s (错误: %v)", filePath, err)
 			}
 		}
 
@@ -537,24 +516,25 @@ func printUsage() {
   -input          string   输入pcap文件路径 (必填)
   -proto          string   传输层协议过滤 (可选: tcp/udp/icmp)
   -app            string   应用层协议过滤 (可选: http/https/ssh/mysql/redis/tcp-text/tcp-binary/tcp-no-payload)
-  -sip            string   源IP过滤 (可选, 支持IPv4/IPv6)
-  -sport          uint     源端口过滤 (可选, 范围: 1-65535)
-  -dip            string   目的IP过滤 (可选, 支持IPv4/IPv6)
-  -dport          uint     目的端口过滤 (可选, 范围: 1-65535)
-  -regex          string   正则过滤表达式 (可选, 匹配应用层数据)
-  -output         string   输出目录路径 (可选, 不指定则仅打印结果)
-  -custom-feature string   自定义协议特征 (可选, 匹配应用层数据)
-  -ignore-case    bool     特征匹配忽略大小写 (可选, 默认: true)
+  -sip            string   源IP过滤 (可选，支持IPv4/IPv6)
+  -sport          uint     源端口过滤 (可选，范围: 1-65535)
+  -dip            string   目的IP过滤 (可选，支持IPv4/IPv6)
+  -dport          uint     目的端口过滤 (可选，范围: 1-65535)
+  -regex          string   正则过滤表达式 (可选，匹配应用层数据)
+  -regex-invert   bool     正则取反匹配 (可选，默认: false，true=保留未命中正则的会话)
+  -output         string   输出目录路径 (可选，不指定则仅打印结果)
+  -custom-feature string   自定义协议特征 (可选，匹配应用层数据)
+  -ignore-case    bool     特征匹配忽略大小写 (可选，默认: true)
 
 使用样例: 
-  1. 分析pcap文件并打印所有非无负载会话: 
-     pcap-filter -input traffic.pcap
+  1. 正向匹配：保留含 BAS_ID=.{16} 的HTTP会话
+     pcap-filter -input traffic.pcap -app http -regex "BAS_ID=.{16}"
 
-  2. 过滤含_BAS_ID的HTTP会话并保存, 同时显示统计: 
-     pcap-filter -input traffic.pcap -app http -regex "_BAS_ID=" -output ./http_sessions
+  2. 反向匹配：保留不含 BAS_ID=.{16} 的HTTP会话（新增参数）
+     pcap-filter -input traffic.pcap -app http -regex "BAS_ID=.{16}" -regex-invert
 
-  3. 过滤源IP为192.168.1.100的TCP会话, 仅保留正则命中的: 
-     pcap-filter -input traffic.pcap -proto tcp -sip 192.168.1.100 -regex "REQ_ID=.{16}"
+  3. 反向匹配+输出文件：保留不含目标正则的会话并保存
+     pcap-filter -input traffic.pcap -app http -regex "BAS_ID=.{16}" -regex-invert -output ./non_bas_sessions
 `)
 }
 
