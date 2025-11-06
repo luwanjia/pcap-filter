@@ -60,7 +60,8 @@ pcap-filter(PCAP会话信息过滤工具)
 ```
 ## 2.2 编译
 ```
-go mod init pcap-tool
+cd src
+go mod init pcap-filter
 go mod tidy
 go build -o pcap-filter main.go
 ```
