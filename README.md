@@ -51,17 +51,48 @@ pcap-filter(PCAP会话信息过滤工具)
 ```
 
 # 2 编译
-## 2.1 依赖
+
+## 2.1 Linux环境中编译
+
+### 2.1.1 依赖
 ```
 "github.com/google/gopacket"
 "github.com/google/gopacket/layers"
 "github.com/google/gopacket/pcap"
 "github.com/google/gopacket/pcapgo"
 ```
-## 2.2 编译
+### 2.1.2 编译
 ```
 cd src
 go mod init pcap-filter
 go mod tidy
 go build -o pcap-filter main.go
 ```
+
+## 2.2 MSYS2环境中编译[CLANG64]
+
+### 2.2.1 依赖
+
+```
+# pacman -S mingw-w64-clang-x86_64-go
+# pacman -S mingw-w64-clang-x86_64-libpcap
+```
+
+### 2.2.2 环境变量
+
+```
+$ export GOROOT="/clang64/lib/go"
+$ export GO111MODULE="on"
+$ export GOPROXY="https://goproxy.cn,direct"
+$ export GOSUMDB="sum.golang.google.cn"
+```
+
+### 2.2.3 编译
+
+```
+cd src
+go mod init pcap-filter
+go mod tidy
+go build -o pcap-filter main.go
+```
+
